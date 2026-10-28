@@ -1,0 +1,23 @@
+﻿################################################################################
+# This .gitignore file was automatically created by Microsoft(R) Visual Studio.
+################################################################################
+
+/.vs
+/BackgroundJobs/.vs
+/BackgroundJobs/src/Application/bin/Debug/net10.0
+/BackgroundJobs/src/Application/obj
+/BackgroundJobs/src/Domain/bin/Debug/net10.0
+/BackgroundJobs/src/Domain/obj
+/BackgroundJobs/src/Infrastructure/bin/Debug/net10.0
+/BackgroundJobs/src/Infrastructure/obj
+/BackgroundJobs/src/Presentation/bin/Debug/net10.0
+/BackgroundJobs/src/Presentation/obj
+/OrderApi/.vs/Enterprise.OrderApi.slnx
+/OrderApi/src/Enterprise.OrderApi.Api/bin/Debug/net10.0
+/OrderApi/src/Enterprise.OrderApi.Api/obj
+/OrderApi/src/Enterprise.OrderApi.Application/bin/Debug/net10.0
+/OrderApi/src/Enterprise.OrderApi.Application/obj
+/OrderApi/src/Enterprise.OrderApi.Domain/bin/Debug/net10.0
+/OrderApi/src/Enterprise.OrderApi.Domain/obj
+/OrderApi/src/Enterprise.OrderApi.Infrastructure/bin/Debug/net10.0
+/OrderApi/src/Enterprise.OrderApi.Infrastructure/obj
