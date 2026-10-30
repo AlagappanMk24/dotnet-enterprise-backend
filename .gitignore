@@ -21,3 +21,14 @@
 /OrderApi/src/Enterprise.OrderApi.Domain/obj
 /OrderApi/src/Enterprise.OrderApi.Infrastructure/bin/Debug/net10.0
 /OrderApi/src/Enterprise.OrderApi.Infrastructure/obj
+/OrderApi/.vs/ProjectEvaluation
+/SignalRHub/.vs
+/SignalRHub/.github
+/SignalRHub/src/SignalRHub.Api/bin/Debug/net10.0
+/SignalRHub/src/SignalRHub.Api/obj
+/SignalRHub/src/SignalRHub.Application/bin/Debug/net10.0
+/SignalRHub/src/SignalRHub.Application/obj
+/SignalRHub/src/SignalRHub.Domain/bin/Debug/net10.0
+/SignalRHub/src/SignalRHub.Domain/obj
+/SignalRHub/src/SignalRHub.Infrastructure/bin/Debug/net10.0
+/SignalRHub/src/SignalRHub.Infrastructure/obj

@@ -1,0 +1,712 @@
+<!doctype html>
+<!--
+  Notification console: a small test page for the SignalR hub.
+
+  How to use it (open it in two browser tabs as two different users):
+    1. Connect    : gets a dev JWT from /dev/token, then opens a SignalR connection.
+    2. Join room  : subscribes this tab to a room, so it receives messages sent to that room.
+    3. Publish    : calls POST /api/notifications, which saves the message and pushes it live.
+
+  Served from wwwroot, so it shares the API's origin and needs no CORS setup.
+  Development only: it relies on /dev/token. Delete it before deploying.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Notification console</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+/* ===== Theme colors =====
+   Dark by default. The light block below overrides them when the OS is set to light mode. */
+:root{
+  --bg:#0c1722;          /* page background */
+  --panel:#12212f;       /* cards and panels */
+  --inset:#0e1b27;       /* inputs and inner areas */
+  --line:#24394b;        /* borders */
+  --tx:#e6eef5;          /* main text */
+  --mu:#8aa1b3;          /* muted text */
+  --sig:#46d7ff;         /* brand accent, also the "received" color */
+  --sent:#a78bfa;        /* the "sent" color on the signal strip */
+  --info:#6aa8ff;        /* severity colors */
+  --success:#4fd08a;
+  --warning:#ffb454;
+  --critical:#ff6b6b;
+  --sans:'Sora',system-ui,-apple-system,'Segoe UI',sans-serif;
+  --mono:'JetBrains Mono',ui-monospace,Consolas,monospace;
+}
+@media (prefers-color-scheme:light){
+  :root{--bg:#eef3f7;--panel:#fff;--inset:#f3f7fa;--line:#d3dfe8;--tx:#10202c;--mu:#566b7c;
+    --sig:#0a86ab;--sent:#6b4fd8;--info:#2f6fdd;--success:#1d9a5b;--warning:#b87305;--critical:#d13c3c}
+}
+
+/* ===== Base ===== */
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:14px/1.5 var(--sans)}
+.wrap{max-width:1180px;margin:0 auto;padding:20px 20px 40px}
+
+/* ===== Header and connection status badge ===== */
+.top{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px}
+h1{font-size:20px;font-weight:600;margin:0;letter-spacing:-.01em}
+.sub{color:var(--mu);font-size:13px;margin:2px 0 0;max-width:60ch}
+.status{display:flex;align-items:center;gap:8px;padding:6px 14px;border:1px solid var(--line);border-radius:999px;background:var(--panel);font-size:13px}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--mu)}
+/* The dot color follows data-state, which setStatus() sets from JavaScript. */
+.status[data-state=connected] .dot{background:var(--success);animation:beat 2s infinite}
+.status[data-state=connecting] .dot,.status[data-state=reconnecting] .dot{background:var(--warning)}
+@keyframes beat{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--success) 55%,transparent)}70%,100%{box-shadow:0 0 0 7px transparent}}
+
+/* ===== Signal strip (the animated line across the top) ===== */
+.strip{position:relative;border:1px solid var(--line);border-radius:14px;background:var(--inset);overflow:hidden;margin-bottom:20px}
+.strip canvas{display:block;width:100%;height:96px}
+.strip .lg{position:absolute;left:12px;font-size:11px;color:var(--mu)}
+.strip .up{top:8px}.strip .dn{bottom:8px}
+
+/* ===== Page layout: controls on the left, activity on the right ===== */
+.layout{display:grid;grid-template-columns:360px 1fr;gap:20px;align-items:start}
+@media (max-width:900px){.layout{grid-template-columns:1fr}}   /* stack on small screens */
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;overflow:hidden}
+.stage{padding:16px 18px;border-top:1px solid var(--line)}
+.stage:first-child{border-top:0}
+.stage h2{display:flex;align-items:center;gap:10px;margin:0 0 12px;font-size:14px;font-weight:600}
+.num{width:22px;height:22px;border-radius:50%;border:1px solid var(--sig);color:var(--sig);display:grid;place-items:center;font-size:12px;font-weight:600}
+
+/* ===== Form controls ===== */
+label{display:block;font-size:12px;color:var(--mu);margin:0 0 4px}
+input,textarea{width:100%;padding:9px 11px;border-radius:8px;border:1px solid var(--line);background:var(--inset);color:var(--tx);font:inherit}
+textarea{resize:vertical}
+input::placeholder,textarea::placeholder{color:var(--mu)}
+input:disabled{opacity:.5}
+:focus-visible{outline:2px solid var(--sig);outline-offset:2px}
+.row{display:flex;gap:8px}
+.field{margin:0 0 12px}
+button{font:inherit;cursor:pointer;border-radius:8px;border:1px solid var(--line);background:var(--inset);color:var(--tx);padding:9px 14px;transition:border-color .15s,filter .15s}
+button:hover:not(:disabled){border-color:var(--sig)}
+button:disabled{opacity:.45;cursor:not-allowed}
+.primary{background:var(--sig);border-color:var(--sig);color:#04222c;font-weight:600}
+.primary:hover:not(:disabled){filter:brightness(1.08)}
+.block{width:100%}
+
+/* ===== Segmented toggles (Send to, Severity) =====
+   The selected button has aria-pressed="true", which drives its look. */
+.seg{display:flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--inset)}
+.seg button{flex:1;border:0;border-radius:0;background:transparent;padding:8px 6px;font-size:13px;color:var(--mu)}
+.seg button[aria-pressed=true]{background:var(--panel);color:var(--tx);box-shadow:inset 0 -2px 0 var(--c,var(--sig))}
+.sevseg button::before{content:'';display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--c);margin-right:6px}
+/* --c is the severity color used by the toggle, the feed cards and the toasts. */
+[data-sev=Info]{--c:var(--info)}[data-sev=Success]{--c:var(--success)}
+[data-sev=Warning]{--c:var(--warning)}[data-sev=Critical]{--c:var(--critical)}
+
+/* ===== Joined-room chips ===== */
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;min-height:28px;align-items:center}
+.chip{display:inline-flex;align-items:center;gap:4px;padding:3px 4px 3px 10px;border:1px solid var(--line);border-radius:999px;background:var(--inset);font-family:var(--mono);font-size:12px}
+.chip button{border:0;background:transparent;padding:0 7px;border-radius:999px;color:var(--mu);line-height:1.3}
+.empty{color:var(--mu);font-size:13px;margin:0}
+
+/* ===== Right panel: tabs, counters, feed and log ===== */
+.rhead{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 12px 0 12px;border-bottom:1px solid var(--line)}
+.tabs{display:flex;gap:4px}
+.tabs button{border:0;border-radius:0;background:transparent;color:var(--mu);padding:10px 12px}
+.tabs button[aria-selected=true]{color:var(--tx);box-shadow:inset 0 -2px 0 var(--sig)}
+.rtools{display:flex;align-items:center;gap:10px;padding-bottom:4px}
+.counts{color:var(--mu);font-size:12px}
+.rtools button{padding:5px 10px;font-size:12px}
+.pane{padding:14px 18px 18px;min-height:380px;max-height:600px;overflow:auto}
+
+/* ===== Incoming notification cards ===== */
+.item{padding:10px 12px 10px 14px;border:1px solid var(--line);border-left:3px solid var(--c,var(--info));border-radius:8px;background:var(--inset);margin:0 0 8px;animation:in .2s ease-out}
+.item b{font-weight:600}
+.item .msg{opacity:.88}
+.item .meta{margin-top:4px;color:var(--mu);font-size:11px;font-family:var(--mono)}
+.sev-Info{--c:var(--info)}.sev-Success{--c:var(--success)}.sev-Warning{--c:var(--warning)}.sev-Critical{--c:var(--critical)}
+
+/* ===== Activity log lines ===== */
+.logline{font-family:var(--mono);font-size:12px;padding:2px 0;color:var(--mu)}
+.logline time{margin-right:10px;opacity:.7}
+.logline.ok{color:var(--success)}.logline.warn{color:var(--warning)}.logline.err{color:var(--critical)}.logline.msg{color:var(--sig)}
+
+/* ===== Toast popups (top right) ===== */
+#toasts{position:fixed;top:16px;right:16px;display:flex;flex-direction:column;gap:8px;z-index:10;width:min(320px,calc(100vw - 32px))}
+.toast{padding:10px 12px;border:1px solid var(--line);border-left:3px solid var(--c,var(--info));border-radius:10px;background:var(--panel);box-shadow:0 8px 24px rgba(0,0,0,.25);animation:in .2s ease-out}
+.toast b{display:block;font-weight:600}
+.toast span{color:var(--mu);font-size:13px}
+@keyframes in{from{opacity:0;transform:translateY(-4px)}}
+
+/* Respect the "reduce motion" system setting. */
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- Title and live connection status. The status text and dot are updated by setStatus(). -->
+  <header class="top">
+    <div>
+      <h1>Notification console</h1>
+      <p class="sub">Send and receive live messages from your SignalR hub. Open a second tab as another user to see delivery.</p>
+    </div>
+    <div class="status" id="status" data-state="disconnected" role="status">
+      <span class="dot"></span><span id="statusText">Offline</span>
+    </div>
+  </header>
+
+  <!-- Decorative signal line drawn on a canvas by the "wire" module in the script below. -->
+  <div class="strip" aria-hidden="true">
+    <canvas id="wire"></canvas>
+    <span class="lg up">received</span>
+    <span class="lg dn">sent</span>
+  </div>
+
+  <div class="layout">
+
+    <!-- LEFT: the three steps you perform -->
+    <section class="panel" aria-label="Controls">
+
+      <!-- Step 1: open (or close) the SignalR connection as the chosen user -->
+      <div class="stage">
+        <h2><span class="num">1</span>Connect</h2>
+        <label for="user">User id</label>
+        <div class="row">
+          <input id="user" value="alice" autocomplete="off">
+          <button id="connect" class="primary">Connect</button>
+        </div>
+      </div>
+
+      <!-- Step 2: subscribe to a room. Joined rooms appear as chips below the input. -->
+      <div class="stage">
+        <h2><span class="num">2</span>Join a room</h2>
+        <div class="row">
+          <input id="room" value="room-101" aria-label="Room id" autocomplete="off">
+          <button id="join" disabled>Join</button>
+        </div>
+        <div class="chips" id="chips"></div>
+      </div>
+
+      <!-- Step 3: build a notification and send it through POST /api/notifications -->
+      <div class="stage">
+        <h2><span class="num">3</span>Publish</h2>
+
+        <!-- Who receives it. data-target values match the API's NotificationTarget enum. -->
+        <div class="field">
+          <label>Send to</label>
+          <div class="seg" id="targetSeg">
+            <button type="button" data-target="All" aria-pressed="true">Everyone</button>
+            <button type="button" data-target="User" aria-pressed="false">One user</button>
+            <button type="button" data-target="Room" aria-pressed="false">A room</button>
+          </div>
+        </div>
+
+        <!-- User id or room id. Disabled when sending to everyone (see syncValue). -->
+        <div class="field">
+          <label for="value" id="valueLabel">Audience</label>
+          <input id="value" autocomplete="off">
+        </div>
+        <div class="field">
+          <label for="title">Title</label>
+          <input id="title" value="Hello" autocomplete="off">
+        </div>
+        <div class="field">
+          <label for="message">Message</label>
+          <textarea id="message" rows="2">Sent from the console</textarea>
+        </div>
+
+        <!-- data-sev values match the API's NotificationSeverity enum. -->
+        <div class="field">
+          <label>Severity</label>
+          <div class="seg sevseg" id="sevSeg">
+            <button type="button" data-sev="Info" aria-pressed="true">Info</button>
+            <button type="button" data-sev="Success" aria-pressed="false">Success</button>
+            <button type="button" data-sev="Warning" aria-pressed="false">Warning</button>
+            <button type="button" data-sev="Critical" aria-pressed="false">Critical</button>
+          </div>
+        </div>
+        <button id="send" class="primary block" disabled>Publish</button>
+      </div>
+    </section>
+
+    <!-- RIGHT: what this tab received and what happened -->
+    <section class="panel" aria-label="Activity">
+      <div class="rhead">
+        <div class="tabs" role="tablist">
+          <button role="tab" id="tabFeed" aria-selected="true">Incoming</button>
+          <button role="tab" id="tabLog" aria-selected="false">Activity log</button>
+        </div>
+        <div class="rtools">
+          <span class="counts" id="counts"></span>
+          <button id="clear">Clear</button>
+        </div>
+      </div>
+      <!-- Incoming: one card per notification this tab received -->
+      <div class="pane" id="feed" role="log" aria-live="polite"></div>
+      <!-- Activity log: technical events (connected, joined, errors, ...) -->
+      <div class="pane" id="logPane" hidden></div>
+    </section>
+  </div>
+</div>
+
+<!-- Toast popups are added here by toast(). -->
+<div id="toasts"></div>
+
+<!-- SignalR browser client library (provides the global "signalR" object). -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.7/signalr.min.js"></script>
+<script>
+/** Shortcut: find an element by id. */
+const $ = id => document.getElementById(id);
+
+/** Same rule as the server: letters, digits, "_" and "-", up to 64 characters. Checked here for a quick error. */
+const ROOM_RE = /^[a-zA-Z0-9_-]{1,64}$/;
+
+/**
+ * Everything the page needs to remember, in one place.
+ *  connection : the active SignalR connection object (null when offline)
+ *  token      : the JWT used for the connection and for API calls
+ *  manualStop : true when the user clicked Disconnect, so we do not auto-retry
+ *  rooms      : rooms this tab joined (kept so they can be re-joined after a reconnect)
+ *  received / sent : counters shown in the header of the right panel
+ *  target / severity : current choices in the Publish toggles
+ *  status     : disconnected | connecting | connected | reconnecting
+ */
+const state = {
+  connection: null, token: null, manualStop: false, rooms: new Set(),
+  received: 0, sent: 0, target: 'All', severity: 'Info', status: 'disconnected'
+};
+
+/* =====================================================================
+   SIGNAL STRIP
+   A decorative live line. pulse('in') draws a spike up (message received),
+   pulse('out') draws a spike down (message sent). It has no effect on the app logic.
+   ===================================================================== */
+const wire = (() => {
+  const canvas = $('wire'), ctx = canvas.getContext('2d');
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const STEP = 3;   // horizontal pixels per sample
+  let w = 0, h = 0, buf = [], tick = 0, amp = 0, t = 0, kind = 0, col = {};
+
+  /** Reads the current theme colors from CSS so the canvas matches light/dark mode. */
+  function readColors() {
+    const s = getComputedStyle(document.documentElement);
+    const get = n => s.getPropertyValue(n).trim();
+    col = { mu: get('--mu'), sig: get('--sig'), sent: get('--sent'), warn: get('--warning') };
+  }
+
+  /** Matches the canvas size to its on-screen size (sharp on high-DPI screens) and sizes the sample buffer. */
+  function resize() {
+    const dpr = window.devicePixelRatio || 1;
+    w = canvas.clientWidth; h = canvas.clientHeight;
+    canvas.width = w * dpr; canvas.height = h * dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const n = Math.ceil(w / STEP) + 2;
+    while (buf.length < n) buf.unshift({ v: 0, c: 0 });
+    if (buf.length > n) buf.splice(0, buf.length - n);
+    readColors();
+  }
+
+  /**
+   * Starts a spike. 'in' goes up in the "received" color, 'out' goes down in the "sent" color.
+   * @param {'in'|'out'} direction
+   */
+  function pulse(direction) {
+    amp = direction === 'out' ? -1 : 1;
+    kind = direction === 'out' ? 1 : 0;
+    t = 0;
+  }
+
+  /** Draws the whole line. Color depends on the connection status (grey offline, amber reconnecting). */
+  function draw() {
+    ctx.clearRect(0, 0, w, h);
+    const mid = h / 2;
+    // faint center line
+    ctx.globalAlpha = 0.18; ctx.strokeStyle = col.mu; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(0, mid); ctx.lineTo(w, mid); ctx.stroke();
+    ctx.globalAlpha = 1; ctx.lineWidth = 2; ctx.lineJoin = 'round';
+    // the signal itself, drawn in segments so the color can change mid-line
+    let cur = null;
+    ctx.beginPath();
+    for (let i = 0; i < buf.length; i++) {
+      const s = buf[i], x = i * STEP, y = mid - s.v * h * 0.4;
+      const color = state.status === 'connected' ? (s.c === 1 ? col.sent : col.sig)
+                  : state.status === 'disconnected' ? col.mu : col.warn;
+      if (color !== cur) {
+        if (cur !== null) { ctx.lineTo(x, y); ctx.stroke(); ctx.beginPath(); }
+        ctx.strokeStyle = color; cur = color; ctx.moveTo(x, y);
+      } else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+
+  /** Runs every animation frame: adds one new sample on the right edge, shifts the line left, redraws. */
+  function frame() {
+    tick++;
+    if (tick % (reduce ? 8 : 1) === 0) {
+      const decay = amp * Math.exp(-t / 14) * Math.sin(t / 2.4);                         // fading wiggle after a pulse
+      const idle = state.status === 'connected' ? Math.sin(tick / 9) * 0.03 : 0;          // tiny heartbeat while connected
+      t++;
+      buf.push({ v: decay + idle, c: kind }); buf.shift();
+    }
+    draw();
+    requestAnimationFrame(frame);
+  }
+
+  window.addEventListener('resize', resize);
+  matchMedia('(prefers-color-scheme: dark)').addEventListener('change', readColors);
+  resize(); requestAnimationFrame(frame);
+  return { pulse };
+})();
+
+/* =====================================================================
+   UI HELPERS
+   Small functions that update the page. None of them talk to the server.
+   ===================================================================== */
+
+/**
+ * Updates the status badge and enables or disables the controls to match.
+ * Join and Publish only work while connected; the user box is locked while a connection exists.
+ * @param {'disconnected'|'connecting'|'connected'|'reconnecting'} kind
+ * @param {string} text Label shown in the badge.
+ */
+function setStatus(kind, text) {
+  state.status = kind;
+  $('status').dataset.state = kind;
+  $('statusText').textContent = text;
+  const on = kind === 'connected', active = kind !== 'disconnected';
+  $('join').disabled = !on;
+  $('send').disabled = !on;
+  $('user').disabled = active;
+  $('connect').textContent = kind === 'connecting' ? 'Connecting' : active ? 'Disconnect' : 'Connect';
+  $('connect').classList.toggle('primary', !active);
+  $('connect').disabled = kind === 'connecting';
+}
+
+/**
+ * Adds a line at the top of the Activity log tab.
+ * @param {string} text What happened.
+ * @param {''|'ok'|'warn'|'err'|'msg'} kind Controls the color (green, amber, red, cyan).
+ */
+function log(text, kind = '') {
+  const line = document.createElement('div');
+  line.className = 'logline ' + kind;
+  const time = document.createElement('time');
+  time.textContent = new Date().toLocaleTimeString([], { hour12: false });
+  line.append(time, text);
+  $('logPane').prepend(line);
+}
+
+/**
+ * Shows a small popup in the top right corner that disappears after 4.5 seconds.
+ * @param {string} title Bold first line.
+ * @param {string} body Optional second line.
+ * @param {'Info'|'Success'|'Warning'|'Critical'} sev Picks the color bar.
+ */
+function toast(title, body, sev = 'Info') {
+  const el = document.createElement('div');
+  el.className = 'toast sev-' + sev;
+  const b = document.createElement('b'); b.textContent = title; el.append(b);
+  if (body) { const s = document.createElement('span'); s.textContent = body; el.append(s); }
+  $('toasts').append(el);
+  setTimeout(() => el.remove(), 4500);
+}
+
+/** Refreshes the "N received, N sent, N rooms" text above the feed. */
+function updateCounts() {
+  $('counts').textContent = state.received + ' received, ' + state.sent + ' sent, ' + state.rooms.size + ' rooms';
+}
+
+/** Empties the Incoming tab and shows the "Nothing received yet" hint. */
+function resetFeed() {
+  const p = document.createElement('p');
+  p.className = 'empty'; p.id = 'feedEmpty';
+  p.textContent = 'Nothing received yet. Join a room, then publish from another tab.';
+  $('feed').replaceChildren(p);
+}
+
+/**
+ * Adds one received notification as a card at the top of the Incoming tab (keeps the latest 60).
+ * Uses textContent, never innerHTML, so message text can never run as HTML.
+ * @param {{id:string,title:string,message:string,severity:string,createdAtUtc:string}} n The NotificationDto from the server.
+ */
+function addFeed(n) {
+  $('feedEmpty')?.remove();
+  const sev = ['Info', 'Success', 'Warning', 'Critical'].includes(n.severity) ? n.severity : 'Info';
+  const el = document.createElement('article');
+  el.className = 'item sev-' + sev;
+  const title = document.createElement('b'); title.textContent = n.title;
+  const msg = document.createElement('div'); msg.className = 'msg'; msg.textContent = n.message;
+  const meta = document.createElement('div'); meta.className = 'meta';
+  meta.textContent = sev + '   ' + new Date(n.createdAtUtc).toLocaleTimeString([], { hour12: false }) + '   ' + String(n.id).slice(0, 8);
+  el.append(title, msg, meta);
+  $('feed').prepend(el);
+  while ($('feed').children.length > 60) $('feed').lastElementChild.remove();
+}
+
+/** Redraws the joined-room chips. Clicking the x on a chip leaves that room. */
+function renderChips() {
+  const box = $('chips');
+  box.replaceChildren();
+  if (!state.rooms.size) {
+    const p = document.createElement('span');
+    p.className = 'empty'; p.textContent = 'No rooms yet. Join one to receive room messages.';
+    box.append(p); updateCounts(); return;
+  }
+  for (const r of state.rooms) {
+    const chip = document.createElement('span'); chip.className = 'chip'; chip.append(r);
+    const x = document.createElement('button');
+    x.type = 'button'; x.textContent = '\u00d7'; x.setAttribute('aria-label', 'Leave ' + r);
+    x.onclick = () => leaveRoom(r);
+    chip.append(x); box.append(chip);
+  }
+  updateCounts();
+}
+
+/* =====================================================================
+   SIGNALR: connection lifecycle and room actions
+   These functions talk to the hub (NotificationHub on the server).
+   ===================================================================== */
+
+/**
+ * Runs whenever the server pushes "ReceiveNotification" to this tab.
+ * This is the end of the real-time path: the server's SignalRNotificationService
+ * calls ReceiveNotification, and this function shows the result.
+ * @param {{id:string,title:string,message:string,severity:string,createdAtUtc:string}} n
+ */
+function onNotification(n) {
+  state.received++;
+  addFeed(n);
+  wire.pulse('in');
+  log('Received: ' + n.title, 'msg');
+  toast(n.title, n.message, n.severity);
+  updateCounts();
+}
+
+/**
+ * Joins every room in state.rooms again.
+ * Needed after a reconnect: a reconnect creates a NEW connection id on the server,
+ * and the server forgets the old connection's room memberships.
+ */
+async function rejoin() {
+  for (const r of state.rooms) {
+    try { await state.connection.invoke('JoinRoom', r); }
+    catch (e) { log('Re-join failed for ' + r + ': ' + e.message, 'err'); }
+  }
+}
+
+/**
+ * Runs when SignalR gives up its automatic reconnect attempts (the connection is closed for good).
+ * Keeps trying to start again every 3 seconds, unless the user clicked Disconnect.
+ * @param {string} userId Shown in the status badge once connected again.
+ */
+async function onClosed(userId) {
+  if (state.manualStop) return;
+  setStatus('reconnecting', 'Reconnecting');
+  log('Connection closed, retrying every 3 seconds', 'warn');
+  while (!state.manualStop) {
+    try {
+      await state.connection.start();
+      await rejoin();
+      setStatus('connected', 'Live as ' + userId);
+      log('Restarted, rooms re-joined', 'ok');
+      return;
+    } catch {
+      await new Promise(r => setTimeout(r, 3000));
+    }
+  }
+}
+
+/**
+ * Connect button: logs in and opens the SignalR connection.
+ *  1. Ask /dev/token for a JWT for the typed user id (with the Admin role so Publish works).
+ *  2. Build the connection to /hubs/notifications, sending the token (SignalR puts it in ?access_token=).
+ *  3. Register handlers for events the server can send.
+ *  4. Start the connection.
+ */
+async function connect() {
+  const userId = $('user').value.trim();
+  if (!userId) return toast('User id required', 'Enter a user id to connect.', 'Warning');
+  state.manualStop = false;
+  setStatus('connecting', 'Connecting');
+  try {
+    // 1. Get a token (development only).
+    const res = await fetch('/dev/token?userId=' + encodeURIComponent(userId) + '&role=Admin');
+    if (!res.ok) throw new Error('Token request failed (HTTP ' + res.status + ')');
+    state.token = (await res.json()).token;
+
+    // 2. Describe the connection. The delays (ms) are how long to wait before each automatic retry.
+    const conn = new signalR.HubConnectionBuilder()
+      .withUrl('/hubs/notifications', { accessTokenFactory: () => state.token })
+      .withAutomaticReconnect([0, 2000, 5000, 10000, 20000, 30000, 30000])
+      .build();
+    state.connection = conn;
+
+    // 3. Server-to-client events. Names must match the methods in INotificationClient.
+    conn.on('ReceiveNotification', onNotification);
+    conn.on('UserJoinedRoom', (r, u) => log(u + ' joined ' + r, 'msg'));
+    conn.on('UserLeftRoom', (r, u) => log(u + ' left ' + r, 'msg'));
+
+    // Connection lifecycle events.
+    conn.onreconnecting(() => { setStatus('reconnecting', 'Reconnecting'); log('Connection lost, reconnecting', 'warn'); });
+    conn.onreconnected(async () => {
+      await rejoin();   // new connection id, so rooms must be joined again
+      setStatus('connected', 'Live as ' + userId);
+      log('Reconnected, rooms re-joined', 'ok');
+    });
+    conn.onclose(() => onClosed(userId));
+
+    // 4. Open the connection (runs OnConnectedAsync on the server).
+    await conn.start();
+    setStatus('connected', 'Live as ' + userId);
+    log('Connected as ' + userId, 'ok');
+  } catch (e) {
+    state.connection = null;
+    setStatus('disconnected', 'Offline');
+    log('Connect failed: ' + e.message, 'err');
+    toast('Could not connect', e.message, 'Critical');
+  }
+}
+
+/** Disconnect button: closes the connection on purpose and clears the joined rooms. */
+async function disconnect() {
+  state.manualStop = true;   // tells onClosed() not to retry
+  const c = state.connection;
+  state.connection = null;
+  try { await c?.stop(); } catch { /* already stopped */ }
+  state.rooms.clear();
+  renderChips();
+  setStatus('disconnected', 'Offline');
+  log('Disconnected', 'warn');
+}
+
+/**
+ * Join button: subscribes this tab to the room typed in the Room box.
+ * Calls the hub method JoinRoom on the server, then remembers the room locally.
+ */
+async function joinRoom() {
+  const r = $('room').value.trim();
+  if (!ROOM_RE.test(r)) return toast('Invalid room id', 'Use letters, digits, dash or underscore (up to 64).', 'Warning');
+  if (state.rooms.has(r)) return toast('Already in ' + r, '', 'Info');
+  try {
+    await state.connection.invoke('JoinRoom', r);
+    state.rooms.add(r); renderChips();
+    log('Joined ' + r, 'ok');
+  } catch (e) {
+    log('Join failed: ' + e.message, 'err');
+    toast('Could not join room', e.message, 'Critical');
+  }
+}
+
+/**
+ * Leaves a room (called by the x on a chip). Calls the hub method LeaveRoom on the server.
+ * @param {string} r Room id such as "room-101".
+ */
+async function leaveRoom(r) {
+  try {
+    await state.connection.invoke('LeaveRoom', r);
+    state.rooms.delete(r); renderChips();
+    log('Left ' + r, 'ok');
+  } catch (e) {
+    log('Leave failed: ' + e.message, 'err');
+  }
+}
+
+/**
+ * Publish button: sends the form to POST /api/notifications.
+ * The server saves it and pushes it live. This function only reports the HTTP result;
+ * the notification itself arrives separately through onNotification (if this tab is a target).
+ */
+async function publish() {
+  const target = state.target, value = $('value').value.trim();
+  const body = {
+    title: $('title').value.trim(), message: $('message').value.trim(),
+    severity: state.severity, target, targetValue: target === 'All' ? null : value
+  };
+  // Quick checks so obvious mistakes never reach the server.
+  if (target !== 'All' && !value) return toast('Audience needed', 'Enter a ' + (target === 'User' ? 'user id' : 'room id') + '.', 'Warning');
+  if (!body.title || !body.message) return toast('Title and message required', '', 'Warning');
+
+  $('send').disabled = true;   // prevent double clicks while the request runs
+  const where = target === 'All' ? 'everyone' : target === 'User' ? 'user ' + value : 'room ' + value;
+  try {
+    const res = await fetch('/api/notifications', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + state.token },
+      body: JSON.stringify(body)
+    });
+    if (res.ok) {   // 202 Accepted: saved and handed to SignalR
+      state.sent++; wire.pulse('out');
+      log('Published to ' + where + ' (HTTP ' + res.status + ')', 'ok');
+    } else {
+      const text = (await res.text()).slice(0, 200);
+      log('Publish failed (HTTP ' + res.status + ') ' + text, 'err');
+      toast('Publish failed', 'HTTP ' + res.status + '. See the activity log.', 'Critical');
+    }
+  } catch (e) {
+    log('Publish error: ' + e.message, 'err');
+    toast('Publish failed', e.message, 'Critical');
+  } finally {
+    $('send').disabled = state.status !== 'connected';
+    updateCounts();
+  }
+}
+
+/* =====================================================================
+   WIRING: connects the buttons and toggles to the functions above
+   ===================================================================== */
+
+/** Adjusts the audience box to match "Send to": disabled for Everyone, labeled and hinted for User or Room. */
+function syncValue() {
+  const t = state.target;
+  $('value').disabled = t === 'All';
+  $('value').placeholder = t === 'All' ? 'Not needed, goes to everyone' : t === 'User' ? 'User id, for example bobs' : 'Room id, for example room-101';
+  $('valueLabel').textContent = t === 'User' ? 'User id' : t === 'Room' ? 'Room id' : 'Audience';
+  if (t === 'All') $('value').value = '';
+}
+
+/**
+ * Makes a row of buttons behave like a single-choice toggle.
+ * @param {string} id Container element id.
+ * @param {string} attr The data-* attribute that holds each button's value (for example "target").
+ * @param {(value:string)=>void} onPick Called with the chosen value.
+ */
+function segment(id, attr, onPick) {
+  $(id).addEventListener('click', e => {
+    const b = e.target.closest('button[data-' + attr + ']');
+    if (!b) return;
+    $(id).querySelectorAll('button').forEach(x => x.setAttribute('aria-pressed', x === b));
+    onPick(b.dataset[attr]);
+  });
+}
+segment('targetSeg', 'target', v => { state.target = v; syncValue(); });
+segment('sevSeg', 'sev', v => { state.severity = v; });
+
+/**
+ * Switches between the Incoming and Activity log tabs.
+ * @param {'feed'|'log'} name
+ */
+function showTab(name) {
+  const feed = name === 'feed';
+  $('feed').hidden = !feed; $('logPane').hidden = feed;
+  $('tabFeed').setAttribute('aria-selected', feed);
+  $('tabLog').setAttribute('aria-selected', !feed);
+}
+$('tabFeed').onclick = () => showTab('feed');
+$('tabLog').onclick = () => showTab('log');
+
+// Clear empties whichever tab is open.
+$('clear').onclick = () => {
+  if (!$('feed').hidden) resetFeed(); else $('logPane').replaceChildren();
+};
+
+// One button for both actions: connect when offline, disconnect when connected.
+$('connect').onclick = () => state.connection ? disconnect() : connect();
+$('join').onclick = joinRoom;
+$('send').onclick = publish;
+
+// Enter key shortcuts.
+$('user').addEventListener('keydown', e => { if (e.key === 'Enter' && !state.connection) connect(); });
+$('room').addEventListener('keydown', e => { if (e.key === 'Enter' && !$('join').disabled) joinRoom(); });
+
+// Initial screen state.
+resetFeed(); renderChips(); syncValue(); setStatus('disconnected', 'Offline');
+</script>
+</body>
+</html>
