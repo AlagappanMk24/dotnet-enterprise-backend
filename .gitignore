@@ -32,3 +32,14 @@
 /SignalRHub/src/SignalRHub.Domain/obj
 /SignalRHub/src/SignalRHub.Infrastructure/bin/Debug/net10.0
 /SignalRHub/src/SignalRHub.Infrastructure/obj
+/EnterprisePatterns/.vs
+/EnterprisePatterns/src/EnterprisePatterns.Api/bin/Debug/net10.0
+/EnterprisePatterns/src/EnterprisePatterns.Api/obj
+/EnterprisePatterns/src/EnterprisePatterns.Application/bin/Debug/net10.0
+/EnterprisePatterns/src/EnterprisePatterns.Application/obj
+/EnterprisePatterns/src/EnterprisePatterns.Domain/bin/Debug/net10.0
+/EnterprisePatterns/src/EnterprisePatterns.Domain/obj
+/EnterprisePatterns/src/EnterprisePatterns.Infrastructure/bin/Debug/net10.0
+/EnterprisePatterns/src/EnterprisePatterns.Infrastructure/obj
+/EnterprisePatterns/tests/EnterprisePatterns.Tests/bin/Debug/net10.0
+/EnterprisePatterns/tests/EnterprisePatterns.Tests/obj

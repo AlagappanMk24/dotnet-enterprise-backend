@@ -1,0 +1,7 @@
+<Solution>
+  <Project Path="src/EnterprisePatterns.Api/EnterprisePatterns.Api.csproj" />
+  <Project Path="src/EnterprisePatterns.Application/EnterprisePatterns.Application.csproj" />
+  <Project Path="src/EnterprisePatterns.Domain/EnterprisePatterns.Domain.csproj" />
+  <Project Path="src/EnterprisePatterns.Infrastructure/EnterprisePatterns.Infrastructure.csproj" />
+  <Project Path="tests/EnterprisePatterns.Tests/EnterprisePatterns.Tests.csproj" />
+</Solution>
